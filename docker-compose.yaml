@@ -1,6 +1,22 @@
 version: '3'
 
 services:
+
+  reverse_proxy:
+    image: "nginx:latest"
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - certs:/etc/ssl
+      - ./conf/nginx/conf.d:/etc/nginx/conf.d
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+    networks:
+      - chat-net
+      - ldap-net
+    depends_on:
+      - chat
+
   chat:
     image: registry.rocket.chat/rocketchat/rocket.chat:latest
     command: >
@@ -15,14 +31,51 @@ services:
     volumes:
       - rocketchat_uploads:/app/uploads
     environment:
-      - PORT=3000
-      - ROOT_URL=http://localhost:3000
-      - MONGO_URL=mongodb://chat_db:27017/rocketchat
-      - MONGO_OPLOG_URL=mongodb://chat_db:27017/local
+      PORT: '3000'
+      MONGO_URL: mongodb://chat_db:27017/rocketchat
+      MONGO_OPLOG_URL: mongodb://chat_db:27017/local
+
+      OVERWRITE_SETTING_LDAP_User_Search_Field: cn
+      OVERWRITE_SETTING_LDAP_Sync_User_Avatar: 'false'
+      OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_By_TOTP_Enabled: 'false'
+      OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_By_Email_Enabled: 'false'
+      OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_Enforce_Password_Fallback: 'false'
+      OVERWRITE_SETTING_Accounts_TwoFactorAuthentication_Enabled: 'false'
+      OVERWRITE_SETTING_UI_Use_Real_Name: 'true'
+
+      OVERWRITE_SETTING_LDAP_Username_Field: cn
+
+      OVERWRITE_SETTING_LDAP_LDAP_Login_Fallback: 'true'
+      OVERWRITE_SETTING_LDAP_Enable: 'true'
+
+      OVERWRITE_SETTING_LDAP_Authentication: 'true'
+      OVERWRITE_SETTING_LDAP_Authentication_UserDN: cn=admin,dc=example,dc=org
+      OVERWRITE_SETTING_LDAP_Authentication_Password: secret
+
+      
+
+      OVERWRITE_SETTING_LDAP_BaseDN: dc=example,dc=org
+      OVERWRITE_SETTING_LDAP_Host: ldap
+      OVERWRITE_SETTING_LDAP_AD_User_Search_Field: 'uid'
+      
+
+      OVERWRITE_SETTING_Allow_Marketing_Emails: 'false'
+      OVERWRITE_SETTING_Apps_Framework_enabled: 'false'
+      OVERWRITE_SETTING_Statistics_reporting: 'false'
+      OVERWRITE_SETTING_Show_Setup_Wizard: "completed"
+      
     depends_on:
       - chat_db
+      - ldap
+    expose:
+      - 3000
     ports:
       - 3000:3000
+    networks:
+      - chat-net
+      - ldap-net
+
+
 
   chat_db:
     image: mongo:4.0
@@ -31,6 +84,10 @@ services:
      - rocketchat_mongo_db:/data/db
      #- ./data/dump:/dump
     command: mongod --smallfiles --oplogSize 128 --replSet rs0 --storageEngine=mmapv1
+    expose:
+      - 27017
+    networks:
+      - chat-net
 
   # this container's job is just run the command to initialize the replica set.
   # it will run the command and remove itself (it will not stay running)
@@ -49,7 +106,42 @@ services:
         done; (exit $$s)"
     depends_on:
       - chat_db
+    networks:
+      - chat-net
+
+  ldap:
+    image: osixia/openldap
+    restart: unless-stopped
+    expose:
+      - 389
+      - 636
+    environment: # username: cn=admin,dc=example,dc=org
+      - LDAP_ADMIN_PASSWORD=secret
+    volumes:
+      - ldap:/var/lib/ldap
+      - ldap-conf:/etc/ldap/slapd.d
+    networks:
+      - ldap-net
+
+
+  ldap-admin:
+    image: osixia/phpldapadmin
+    restart: unless-stopped
+    expose:
+      - 443
+    environment:
+      - PHPLDAPADMIN_LDAP_HOSTS=ldap
+      - PHPLDAPADMIN_HTTPS=false 
+    networks:
+      - ldap-net
 
 volumes:
   rocketchat_uploads:
   rocketchat_mongo_db:
+  certs:
+  ldap:
+  ldap-conf:
+
+networks:
+  chat-net:
+  ldap-net:
